@@ -1,0 +1,4 @@
+kafka_python==2.0.2
+numpy==1.24.3
+pandas==2.0.1
+Requests==2.29.0
