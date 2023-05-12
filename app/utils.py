@@ -82,37 +82,41 @@ class ProcessWatcher:
         self.__dict__.update(kwargs)
         self.processes = {}
 
-    def add_proces(self, n, end):
+    def add_proces(self, n, endpoint):
         '''
         Function to add an endpointreader as a new process at the n position in the watcher
         '''
-        for attempt in range(self.max_restar_attempts+1):
-            if attempt < self.max_restar_attempts:
-                try:
-                    p = Process(target=end.generate_data)
-                    p.name = end.api_name
-                    p.start()
-                    self.processes[n] = (p, end)
-                except:
-                    logger.warning(f'Start of endpoint {end.api_name} failed. Attempt number {attempt+1}. Retry in {self.restar_sleep_time} sec...')
+        attempt = 0 
+        while attempt < self.max_reads_attemps:
+            attempt += 1
+            try:
+                p = Process(target=endpoint.generate_data)
+                p.name = endpoint.api_name
+                p.start()
+                self.processes[n] = (p, endpoint)
+            except:
+                logger.warning(f'Starting attempt {attempt} of endpoint {endpoint.api_name} failed.')
+                if attempt < self.max_reads_attemps:
+                    logger.info(f'Retry in {self.restar_sleep_time} sec...')
                     time.sleep(self.restar_sleep_time)
                 else:
-                    logger.info(f'Process {p.name} started succesfully!')
-                    break
+                    logger.error(f'ERROR: endpoint {endpoint.api_name} failed to start! skipping...')
             else:
-                logger.error(f'ERROR: endpoint {end.api_name} failed to start! skipping...')
+                logger.info(f'Process {p.name} started succesfully!')
+                break
+        
 
     def process_watcher(self):  
         starttime = time.time()
         while len(self.processes) > 0:
             if time.time() - starttime > self.watcher_max_uptime:
-                logger.info(f'maximum uptime ({self.watcher_max_uptime}) reached. Finishing services')
+                logger.info(f'Maximum uptime ({self.watcher_max_uptime}) reached. Finishing services')
                 for n in list(self.processes.keys()):
-                    p, end = self.processes[n]
+                    p, endpoint = self.processes[n]
                     p.terminate()
                 break
             for n in list(self.processes.keys()):
-                p, end = self.processes[n]
+                p, endpoint = self.processes[n]
                 time.sleep(self.watcher_sleep_time)
                 if p.is_alive():
                     pass
@@ -122,19 +126,22 @@ class ProcessWatcher:
                         del self.processes[n]
                     else:
                         logger.warning('process finished abnormally. Restarting...')
-                        for attempt in range(self.max_restar_attempts+1):
-                            if attempt < self.max_restar_attempts:
-                                try:
-                                    self.processes[n] = self.add_proces(end)
-                                except:
-                                    logger.warning(f'Restart attempt number {attempt+1} failed. retry in {self.restar_sleep_time} sec...')
+                        attempt = 0 
+                        while attempt < self.max_reads_attemps:
+                            attempt += 1 
+                            try:
+                                self.processes[n] = self.add_proces(endpoint)
+                            except:
+                                logger.warning(f'Restart attempt number {attempt+1} failed. retry in {self.restar_sleep_time} sec...')
+                                if attempt < self.max_reads_attemps:
+                                    logger.info(f'Retry in {self.restar_sleep_time} sec...')
                                     time.sleep(self.restar_sleep_time)
                                 else:
-                                    logger.info(f'Service {p.name} restarted succesfully!')
-                                    break
+                                    logger.error(f'ERROR: service {p.name} failed to restart! skipping...')
+                                    del self.processes[n]
                             else:
-                                logger.error(f'ERROR: service {p.name} failed to restart! skipping...')
-                                del self.processes[n]
+                                logger.info(f'Service {p.name} restarted succesfully!')
+                                break
 
 class TranformingFunctions:
 
