@@ -1,12 +1,15 @@
-
+# Built-in modules
 import json
 import logging as lg
 from multiprocessing import Process
-import pandas as pd 
-import requests
 import time
-from kafka import KafkaProducer
 
+# Third-party modules
+import pandas as pd 
+from kafka import KafkaProducer
+import requests
+
+# Custom modules
 
 
 logger = lg.getLogger(__name__)
@@ -21,12 +24,12 @@ class EndpointReader():
         In case is unable to conect stores a predefined exception data.
         '''
         try:
-            data = json.loads(requests.get(self.api_url).text)
+            data = json.loads(requests.get(self.inputs['api_url']).text)
             data = pd.json_normalize(data['results'])
-            data = data[self.api_value_names]
+            data = data[self.inputs['api_value_names']]
         except:
-            logger.warning(f'Connection to {self.api_name} failed...')
-            data = pd.DataFrame(self.api_except_values)
+            logger.warning(f'Connection to {self.inputs["api_name"]} failed...')
+            data = pd.DataFrame(self.inputs['api_except_values'])
         ### data transformation using custom functions if needed
         if self.api_function_name != 'None':
             f = getattr(TranformingFunctions, self.api_function_name)
@@ -39,17 +42,22 @@ class EndpointReader():
         '''
         Function to send data into a kafka topic
         '''
-        logger.info(f'submiting data from {self.api_name} to kafka topic {self.kafka_topic_name}')
+        logger.info(f'submiting data from {self.inputs["api_name"]} \
+                      to kafka topic {self.outputs["kafka_topic_name"]}')
         try:
-            producer = KafkaProducer(bootstrap_servers=[self.kafka_url],
-                            value_serializer=lambda x: json.dumps(x).encode('utf-8'))
-            producer.send(self.kafka_topic_name,
+            producer = KafkaProducer(bootstrap_servers=[self.outputs['kafka_url']],
+                            value_serializer=lambda x: json.dumps(x)
+                                                           .encode('utf-8'))
+            producer.send(self.outputs['kafka_topic_name'],
                             value=self.data.to_dict(orient='records'))
         except:
-            logger.warning(f'Unable to submit data from {self.api_name} into {self.kafka_topic_name}')
+            logger.warning(f'Unable to submit data from {self.inputs["api_name"]} \
+                           into {self.outputs["kafka_topic_name"]}')
             return False
         else:
-            logger.info(f'{self.data.shape[0]} rows of data from {self.api_name} deposited into {self.kafka_topic_name} succesfully!')
+            logger.info(f'{self.data.shape[0]} rows of data from \
+                          {self.inputs["api_name"]} deposited into \
+                          {self.outputs["kafka_topic_name"]} succesfully!')
             return True
   
     def generate_data(self):
@@ -57,15 +65,16 @@ class EndpointReader():
         Main function to obtain data from an API, concatenate to a dataframe
         and send it to a kafka topic.
         '''
-        logger.info(f'Starting {self.api_name} service...')
+        logger.info(f'Starting {self.inputs["api_name"]} service...')
         submittime = starttime = time.time()
         ### starting service
         while True:
-            time.sleep(self.api_get_frecuency)
+            time.sleep(self.inputs['api_get_frecuency'])
             ### get data from API and concat to previous
             self.data = pd.concat([self.data, self.receive_data()])
-            if time.time() - submittime >= self.kafka_submit_frecuency:
-                logger.info(f'submiting data from {self.api_name} to kafka topic {self.kafka_topic_name}...')
+            if time.time() - submittime >= self.outputs['kafka_submit_frecuency']:
+                logger.info(f'submiting data from {self.inputs["api_name"]} \
+                              to kafka topic {self.outputs["kafka_topic_name"]}...')
                 ### try to submit data into kafka
                 if self.send_data():
                     self.data = pd.DataFrame()
@@ -74,7 +83,8 @@ class EndpointReader():
                 submittime = time.time()
             ### check if reached maximum running time
             if (time.time() - starttime) >= self.service_max_length:
-                logger.info(f'max_length ({self.service_max_length} secs) reached. Stoping service {self.api_name}')
+                logger.info(f'max_length ({self.service_max_length} secs) \
+                              reached. Stoping service {self.inputs["api_name"]}')
                 break
 
 class ProcessWatcher:
@@ -84,23 +94,26 @@ class ProcessWatcher:
 
     def add_proces(self, n, endpoint):
         '''
-        Function to add an endpointreader as a new process at the n position in the watcher
+        Function to add an endpointreader as a new process at 
+        the n position in the watcher
         '''
         attempt = 0 
-        while attempt < self.max_reads_attemps:
+        while attempt < self.api_max_reads_attemps:
             attempt += 1
             try:
                 p = Process(target=endpoint.generate_data)
-                p.name = endpoint.api_name
+                p.name = endpoint.inputs['api_name']
                 p.start()
                 self.processes[n] = (p, endpoint)
             except:
-                logger.warning(f'Starting attempt {attempt} of endpoint {endpoint.api_name} failed.')
-                if attempt < self.max_reads_attemps:
+                logger.warning(f'Starting attempt {attempt} of endpoint \
+                                 {endpoint.inputs["api_name"]} failed.')
+                if attempt < self.api_max_reads_attemps:
                     logger.info(f'Retry in {self.restar_sleep_time} sec...')
                     time.sleep(self.restar_sleep_time)
                 else:
-                    logger.error(f'ERROR: endpoint {endpoint.api_name} failed to start! skipping...')
+                    logger.error(f'ERROR: endpoint {endpoint.inputs["api_name"]} failed \
+                                   to start! skipping...')
             else:
                 logger.info(f'Process {p.name} started succesfully!')
                 break
@@ -110,7 +123,8 @@ class ProcessWatcher:
         starttime = time.time()
         while len(self.processes) > 0:
             if time.time() - starttime > self.watcher_max_uptime:
-                logger.info(f'Maximum uptime ({self.watcher_max_uptime}) reached. Finishing services')
+                logger.info(f'Maximum uptime ({self.watcher_max_uptime}) \
+                              reached. Finishing services')
                 for n in list(self.processes.keys()):
                     p, endpoint = self.processes[n]
                     p.terminate()
@@ -125,23 +139,32 @@ class ProcessWatcher:
                         logger.info(f'process {p.name} finished succesfully.')
                         del self.processes[n]
                     else:
-                        logger.warning('process finished abnormally. Restarting...')
-                        attempt = 0 
-                        while attempt < self.max_reads_attemps:
-                            attempt += 1 
-                            try:
-                                self.processes[n] = self.add_proces(endpoint)
-                            except:
-                                logger.warning(f'Restart attempt number {attempt+1} failed. retry in {self.restar_sleep_time} sec...')
-                                if attempt < self.max_reads_attemps:
-                                    logger.info(f'Retry in {self.restar_sleep_time} sec...')
-                                    time.sleep(self.restar_sleep_time)
-                                else:
-                                    logger.error(f'ERROR: service {p.name} failed to restart! skipping...')
-                                    del self.processes[n]
-                            else:
-                                logger.info(f'Service {p.name} restarted succesfully!')
-                                break
+                        self.process_restart(p, n, endpoint)
+
+    def process_restart(self, p, n, endpoint):                
+        logger.warning('process finished abnormally. \
+                                        Restarting...')
+        attempt = 0 
+        while attempt < self.max_reads_attemps:
+            attempt += 1 
+            try:
+                self.processes[n] = self.add_proces(endpoint)
+            except:
+                logger.warning(f'Restart attempt number \
+                                    {attempt+1} failed. retry  in \
+                                    {self.restar_sleep_time} sec...')
+                if attempt < self.max_reads_attemps:
+                    logger.info(f'Retry in \
+                                    {self.restar_sleep_time} sec...')
+                    time.sleep(self.restar_sleep_time)
+                else:
+                    logger.error(f'ERROR: service {p.name} \
+                                    failed to restart! skipping...')
+                    del self.processes[n]
+            else:
+                logger.info(f'Service {p.name} \
+                                restarted succesfully!')
+                break
 
 class TranformingFunctions:
 
@@ -157,5 +180,6 @@ class TranformingFunctions:
             data['dob.age'] = 'No Data'
         else:
             data['dob.age'] = math.floor((datetime.now() 
-                                          - pd.to_datetime(data['dob'][0]))/np.timedelta64(1, 'Y'))
+                                          - pd.to_datetime(data['dob'][0])) \
+                                          / np.timedelta64(1, 'Y'))
         return data
